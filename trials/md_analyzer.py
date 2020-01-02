@@ -2,7 +2,7 @@
 # PROCESS XDATCAR, PLOT ATOMIC POSITIONS AND MOTION.
 # COMPUTES VDATCAR AND VELOCITY AUTOCORELATION, GENERATE POWER SPECTRUM.
 # PERFOM BOND LEGTH AND ANGLE STATISTICS
-# Sumudu Tennakoon (Created: 2017-10-22)
+# Sumudu Tennakoon (Created 2017-10-22, Last update: 2019-12-02)
 
 from math import *
 import numpy as np
@@ -13,28 +13,6 @@ from matplotlib.path import Path
 import matplotlib.patches as patches
 FN =2000 #Number of frams to be processed
 
-###############################################################################
-# Wrapper functions(use untions)
-def xdatcar2vdatcar(XDATCARFILE='XDATCAR', VDATCARFILE='VDATCAR', OutValues=False, OutFile=True):
-    '''
-    Function computes velocity profile (VDATCAR) given an XDATCAR file from vasp output.
-    '''
-    if OutFile == True:
-        # Outputs VDATCAR file
-    if OutValues == True:
-        # return velocity vs. time
-        return VDATCAR
-
-def velocitycorr(VDATCARFILE='VDATCAR', VELCORRFILE = 'VCORR', dt=None, N=None, interval=None, OutValues=True, OutFile=False):
-    '''
-    Function computes power spectrum (PSPectra) given velocity profile (VDATCAR).
-    '''
-    if OutFile == True:
-        # Outputs VCORR file
-    if OutValues == True:
-        # return power spectrum
-        return VDATCAR    
-###############################################################################    
 def element_constant(element):
     if element=="H":
         mass = 1.00794 #u
@@ -54,12 +32,233 @@ def element_constant(element):
         color = "k"       
         
     return mass,radius,color
-        
+
+def vac(vframes, filename="XDATCAR", atoms=None):
+    atoms=None
+    dt=1e-15
+    frame_count=len(vframes)
+    vacf=np.zeros(frame_count)
+    #print("Frames "+str(frame_count))
+    #print(atoms)
+    for t in range(0,frame_count):
+        num = 0.0
+        denom = 0.0    
+        for t0 in range(0,1): #frame_count): #Corelate with origin
+            for i in range(0,len(vframes[t])):
+                #print(i)
+                if atoms != None:
+                    if i not in atoms:
+                        continue
+                        
+                vx0i = vframes[t0][i][0]
+                vy0i = vframes[t0][i][1]
+                vz0i = vframes[t0][i][2]            
+                vxti = vframes[t][i][0]
+                vyti = vframes[t][i][1]
+                vzti = vframes[t][i][2]
+                
+                v0vt = vx0i*vxti + vy0i*vyti + vz0i*vzti
+                v0v0 = vx0i*vx0i + vy0i*vy0i + vz0i*vz0i
+
+                num = num + v0vt
+                #denom = denom + v0v0
+                denom = 1.0 # No normalization
+                
+        vacf[t] = num/denom
+    
+    # time steps
+    n = frame_count*20
+    #n = frame_count
+    
+    ts=np.linspace(0, dt*frame_count, frame_count)
+    #freq = np.fft.fftfreq(frame_count, dt)/1e12*4.13567 #meV
+    freq = np.fft.fftfreq(n, dt)/1e12*33.35641 #conversion to cm-1
+    
+    # WINDOW
+    from scipy.signal import hanning
+    window = np.hanning(len(vacf)) #Apply Hann window  
+    #window = 1.0
+    
+    ps = np.fft.fft(vacf*window, n=n)
+#    gaussian = np.exp(-(freq/20.0)**2/2)
+#    ps = np.convolve(ps, gaussian, mode="full")   
+    ps = ps.real**2+ps.imag**2
+ 
+
+    vacf_File = ""
+    ps_file=""
+	
+    #Writes Power Spectrum PSPEC file
+    for i in range(len(ps)//2):
+        ps_file=ps_file+"%.2f\t%.4f\n"%(freq[i],ps[i])	
+    ff = open(filename+"_"+"PSPEC",'w')
+    ff.write(ps_file)
+    ff.close()    
+    
+    #Writes Velocity Autocorelation Function to VACF file
+    for i in range(len(vframes)):
+        vacf_File=vacf_File+"%e\t%.4f\n"%(ts[i],vacf[i])	
+    ff = open(filename+"_"+"VACF",'w')
+    ff.write(vacf_File)
+    ff.close()   
+    
+    plt.figure(1)
+    plt.plot(ts*1e12, vacf,label=filename)
+    plt.xlabel("Time [ps]")
+    plt.ylabel("VACF")
+    plt.legend()
+    plt.figure(2)
+    #plt.psd(vacf, 512, 1.0/dt,pad_to=4096)
+    plt.plot(freq,ps,"-",label=filename)  
+    plt.xlabel("Frequency [cm-1]")
+    plt.ylabel("Vibrational Density")
+    plt.legend()
+    plt.xlim(0,4500)
+    
+def vac0(vframes,filename="XDATCAR"): #was used on 2019-12-02
+    nom=0.0
+    denom=0.0
+    dt=1e-15
+    frame_count=len(vframes)
+    vacf=np.zeros(frame_count)
+    #print("Frames "+str(frame_count))
+
+    for t in range(0,frame_count):
+        vact = 0.0
+        for i in range(0,len(vframes[t])):
+            vx0i = vframes[0][i][0]
+            vy0i = vframes[0][i][1]
+            vz0i = vframes[0][i][2]            
+            vxti = vframes[t][i][0]
+            vyti = vframes[t][i][1]
+            vzti = vframes[t][i][2]
+            #Use to normalize
+            vti = sqrt(vxti**2+vyti**2+vzti**2)
+            v0i = sqrt(vx0i**2+vy0i**2+vz0i**2)
+            vact = vact + (vx0i*vxti+vy0i*vyti+vz0i*vzti)/(vti*v0i)
+        vacf[t] = vact/len(vframes[t])
+    
+    # time steps
+    n = frame_count*10
+    #n = frame_count
+    
+    ts=np.linspace(0, dt*frame_count, frame_count)
+    #freq = np.fft.fftfreq(frame_count, dt)/1e12*4.13567 #meV
+    freq = np.fft.fftfreq(n, dt)/1e12*33.35641
+    
+    # WINDOW
+    from scipy.signal import hanning
+    window = np.hanning(len(vacf)) #Apply Hann window  
+    #window = 1.0
+    
+    ps = np.fft.fft(vacf*window, n=n)
+#    gaussian = np.exp(-(freq/20.0)**2/2)
+#    ps = np.convolve(ps, gaussian, mode="full")   
+    ps = ps.real**2+ps.imag**2
+ 
+
+    vacf_File = ""
+    ps_file=""
+	
+    #Writes Power Spectrum PSPEC file
+    for i in range(len(ps)//2):
+        ps_file=ps_file+"%.2f\t%.4f\n"%(freq[i],ps[i])	
+    ff = open(filename+"_"+"PSPEC",'w')
+    ff.write(ps_file)
+    ff.close()    
+    
+    #Writes Velocity Autocorelation Function to VACF file
+    for i in range(len(vframes)):
+        vacf_File=vacf_File+"%e\t%.4f\n"%(ts[i],vacf[i])	
+    ff = open(filename+"_"+"VACF",'w')
+    ff.write(vacf_File)
+    ff.close()   
+    
+    plt.figure(1)
+    plt.plot(ts*1e12, vacf,label=filename)
+    plt.xlabel("Time [ps]")
+    plt.ylabel("VACF")
+    plt.legend()
+    plt.figure(2)
+    #plt.psd(vacf, 512, 1.0/dt,pad_to=4096)
+    plt.plot(freq,ps,"-",label=filename)  
+    plt.xlabel("Frequency [cm-1]")
+    plt.ylabel("Vibrational Density")
+    plt.legend()
+    plt.xlim(0,4500)
+      
+def vac1(vframes,filename="XDATCAR"):
+    nom=0.0
+    denom=0.0
+    dt=1e-15
+    frame_count=len(vframes)
+    vacf=np.zeros(frame_count)
+    #print("Frames "+str(frame_count))
+    tmax_frame=frame_count
+    for t in range(0,frame_count): 
+        vact = 0.0
+        for t0 in range(0,tmax_frame-t):
+            vact0 = 0.0
+            for i in range(0,len(vframes[t0])):
+                vx0i = vframes[0][i][0]
+                vy0i = vframes[0][i][1]
+                vz0i = vframes[0][i][2]            
+                vxti = vframes[t0][i][0]
+                vyti = vframes[t0][i][1]
+                vzti = vframes[t0][i][2]
+                #Use to normalize
+                vti = sqrt(vxti**2+vyti**2+vzti**2)
+                v0i = sqrt(vx0i**2+vy0i**2+vz0i**2)
+                vact0 = vact0 + (vx0i*vxti+vy0i*vyti+vz0i*vzti)/(vti*v0i)
+            vact = vact + vact0/(tmax_frame-t)
+        vacf[t] = vact/len(vframes[t])
+
+    ts=np.linspace(0, dt*frame_count, frame_count)
+
+    from scipy.signal import hanning
+    window = np.hanning(len(vacf)) #Apply Hann window  
+    ps = np.fft.fft(vacf*window, n=20480)
+    ps = ps.real**2+ps.imag**2
+    #freq = np.fft.fftfreq(frame_count, dt)/1e12*4.13567 #meV
+    freq = np.fft.fftfreq(20480, dt)/1e12*33.35641
+#    gaussian = np.exp(-(freq/20.0)**2/2)
+#    ps = np.convolve(ps, gaussian, mode="full")    
+    vacf_File = ""
+    ps_file=""
+	
+    #Writes Power Spectrum PSPEC file
+    for i in range(len(ps)/2):
+        ps_file=ps_file+"%.2f\t%.4f\n"%(freq[i],ps[i])	
+    ff = open(filename+"_"+"PSPEC",'w')
+    ff.write(ps_file)
+    ff.close()    
+    
+    #Writes Velocity Autocorelation Function to VACF file
+    for i in range(len(vframes)):
+        vacf_File=vacf_File+"%e\t%.4f\n"%(ts[i],vacf[i])	
+    ff = open(filename+"_"+"VACF",'w')
+    ff.write(vacf_File)
+    ff.close()   
+    
+    plt.figure(1)
+    plt.plot(ts*1e12, vacf,label=filename)
+    plt.xlabel("Time [ps]")
+    plt.ylabel("VACF")
+    plt.legend()
+    plt.figure(2)
+    #plt.psd(vacf, 512, 1.0/dt,pad_to=4096)
+    plt.plot(freq,ps,"-",label=filename)  
+    plt.xlabel("Frequency [cm-1]")
+    plt.ylabel("Vibrational Density")
+    plt.legend()
+    plt.xlim(0,4500)
+
+
 def cords2vector(x, y, z):
     return np.matrix([[x], [y], [z]])
 
 class FRAME(): 
-    def __init__(self,frame_id=0, atom_id=[], atom_uvw=[]):
+    def __init__(self,frame_id=1, atom_id=[], atom_uvw=[]):
         self.frame_id=frame_id
         self.atom_id = atom_id
         self.atom_uvw = atom_uvw
@@ -94,7 +293,7 @@ class XDATCAR():
 
     # calculate displacement of atoms
     def displacements(self,X1,X2):
-	return X2-X1
+        return X2-X1
     
     # calculate velocity of atoms		
     def velocities(self,frame1,frame2,UC,dt=1.0):
@@ -135,14 +334,26 @@ class XDATCAR():
         vdatcarfile=vdatcarfile+"%10d\t%10d\t%10d\n"%(self.atoms_count[0],self.atoms_count[1],self.atoms_count[2])
         
         for i in range(1,len(self.frames)):
-            V=self.velocities(self.frames[i-1],self.frames[i],self.UC)
+            V=self.velocities(self.frames[i-1], self.frames[i], self.UC)
             self.V.append(V)
             vdatcarfile=vdatcarfile+"Frame: %d\n"%(i)
             for j in range(len(V)):
                 vdatcarfile=vdatcarfile+"  % .8f\t% .8f\t% .8f\n"%(V[j][0],V[j][1],V[j][2])
         self.V=np.array(self.V)
-        vac(self.V,self.atom_mass)
-        fv = open(file_name,'w')
+
+        # Isolate Atoms
+        lstH = []
+        lstO = []
+        for i in range(len(self.atom_element)):
+            if self.atom_element[i]=="H":
+                lstH.append(i)
+            elif self.atom_element[i]=="O":
+                lstO.append(i)
+        atoms = lstO + lstH
+        
+        vac(self.V, self.filename, atoms=atoms)
+        
+        fv = open(self.filename+"_"+file_name,'w')
         fv.write(vdatcarfile)
         fv.close()
         del(vdatcarfile)
@@ -181,18 +392,25 @@ class XDATCAR():
         fb.close()
         
         plt.figure(100)
-        n, bins, patches = plt.hist(OH_bond_length, bins=1000, histtype='step')
+        n, bins, patches = plt.hist(OH_bond_length, bins=1000, histtype='step', label=self.filename)
+        plt.xlabel('bond length')
+        #plt.ylabel('count')
+        plt.legend()
         
         plt.figure(200)
-        n, bins, patches = plt.hist(OH_bond_angle2D, bins=1000, histtype='step')
+        n, bins, patches = plt.hist(OH_bond_angle2D, bins=1000, histtype='step', label=self.filename)
+        plt.xlabel('bond angle')
+        plt.legend()
         
         plt.figure(300)
-        n, bins, patches = plt.hist(OH_bond_angle, bins=1000, histtype='step')
+        n, bins, patches = plt.hist(OH_bond_angle, bins=1000, histtype='step', label=self.filename)
+        plt.xlabel('bond angle')
+        plt.legend()
         
-        plt.show()       
+        #plt.show()       
             
     # load data from XDATCAR file        
-    def load(self):
+    def load(self,use_frames=1):
         # read XDATCAR file content to memory
         with open(self.filename, 'r') as f:
             xdatcar=f.readlines()
@@ -264,7 +482,7 @@ class XDATCAR():
 
         self.read_frame(xdatcar[8:8+self.total_atoms],1,True) #dsiplay first frame
         
-        for i in range(FN):
+        for i in range(use_frames):
             # extracting frame data
             frame_start = 8+i*(self.total_atoms+1)
             frame_end = frame_start+self.total_atoms
@@ -272,7 +490,7 @@ class XDATCAR():
             self.frames.append(self.read_frame(frame_lines,i+1, False))  
             self.frames_count=i+1
             
-        print "%d Frames Extracted"%self.frames_count
+        print("%d Frames Extracted"%self.frames_count)
         del(xdatcar)     
     
     # plot unitcell boundaries
@@ -331,6 +549,29 @@ class XDATCAR():
             
         return frame
 
+# Analyse MD output given XDATCAR
+def analyze_md_output(xdatcar_file="XDATCAR",fig_num=000, plot_structure=False, calc_velocities=False, calc_bond_stats=False, use_frames=1):
+    start = time.time()
+    X=XDATCAR(xdatcar_file)
+    print("\nLoading XDARCAR...")
+    X.load(use_frames)
+    
+    if plot_structure==True:
+        print("\nPlotting atom positions...")
+        fig = plt.figure(fig_num)
+        for i in range(0,use_frames,10):
+            X.plot_frame(i,fig,z_max=.250)
+            
+    if calc_velocities==True:
+        print("\nCalculating velocities...")
+        X.vdatcar()
+    
+    if calc_bond_stats==True:
+        print("\nCalculating O-H bond length and angles...")
+        X.OH_bond_stats()
+
+    end=time.time()    
+    print("Run time= %.3f seconds"%(end-start))
 
 
 
